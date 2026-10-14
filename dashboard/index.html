@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>bSecured — live reports</title>
+<style>
+  :root { color-scheme: light dark; --line: #8884; --flash: #e6a70033; }
+  body { font: 14px/1.45 system-ui, sans-serif; margin: 0; padding: 20px; }
+  header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 14px; }
+  h1 { font-size: 18px; margin: 0; }
+  #status { font: 12px ui-monospace, monospace; }
+  #status.live::before { content: "● "; color: #2a9d55; }
+  #status.down::before { content: "● "; color: #c0392b; }
+  .wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-size: 12px; opacity: .7; }
+  td.mono { font: 12px ui-monospace, monospace; }
+  tr.flash td { animation: flash 1.6s ease-out; }
+  @keyframes flash { from { background: var(--flash); } to { background: transparent; } }
+  @media (prefers-reduced-motion: reduce) { tr.flash td { animation: none; } }
+  #message { opacity: .7; padding: 18px 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>bSecured — live reports</h1>
+  <span id="status">connecting…</span>
+</header>
+<div class="wrap">
+  <table>
+    <thead><tr>
+      <th>Received (server)</th><th>Device</th><th>Threat</th>
+      <th>Detected (client)</th><th>Evidence</th><th>Build</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="message">No reports yet.</div>
+</div>
+<script>
+// This page runs on the developer's computer, served by `bsecured dashboard`.
+// It learns the server address and the application's dashboard key from the
+// local /config.json, so the key never appears in a link or in browser history.
+// The key is sent only in an Authorization header to the bSecured server.
+// Every evidence value is attacker-controlled: cells are filled with textContent
+// only, never innerHTML.
+let SERVER = "";
+let AUTH = {};
+const rows = document.getElementById("rows");
+const statusEl = document.getElementById("status");
+const messageEl = document.getElementById("message");
+const seen = new Set();
+
+function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = cls || ""; }
+function showMessage(text) { messageEl.textContent = text; messageEl.hidden = false; }
+
+function cell(text, cls) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (cls) td.className = cls;
+  return td;
+}
+
+function local(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? String(iso) : d.toLocaleString();
+}
+
+function evidenceText(ev) {
+  return Object.entries(ev || {}).map(([k, v]) => k + "=" + v).join("  ");
+}
+
+function render(r, flash) {
+  if (seen.has(r.report_id)) return;          // a reconnect may resend what we have
+  seen.add(r.report_id);
+  const tr = document.createElement("tr");
+  tr.append(
+    cell(local(r.received_at)),
+    cell(r.device_id, "mono"),
+    cell(r.threat_type),
+    cell(local(r.detected_at)),
+    cell(evidenceText(r.evidence), "mono"),
+    cell(r.build_id, "mono"),
+  );
+  if (flash) tr.className = "flash";
+  rows.prepend(tr);                           // newest first
+  messageEl.hidden = true;
+}
+
+class InvalidKey extends Error {}
+
+async function loadRecent() {
+  const res = await fetch(SERVER + "/v1/reports", { headers: AUTH });
+  if (res.status === 401) throw new InvalidKey();
+  if (!res.ok) throw new Error("list failed");
+  (await res.json()).reverse().forEach(r => render(r, false));
+}
+
+// The browser's EventSource cannot send an Authorization header, so the stream
+// is read with fetch and the Server-Sent Events frames are parsed here.
+async function readStream() {
+  const res = await fetch(SERVER + "/v1/stream", { headers: AUTH, cache: "no-store" });
+  if (res.status === 401) throw new InvalidKey();
+  if (!res.ok) throw new Error("stream failed");
+  setStatus("live", "live");
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buffer += value;
+    let end;
+    while ((end = buffer.indexOf("\n\n")) >= 0) {
+      const frame = buffer.slice(0, end);
+      buffer = buffer.slice(end + 2);
+      const lines = frame.split("\n");
+      if (!lines.includes("event: report")) continue;
+      const data = lines.filter(l => l.startsWith("data: ")).map(l => l.slice(6)).join("\n");
+      if (data) render(JSON.parse(data), true);
+    }
+  }
+}
+
+async function run() {
+  try {
+    const config = await (await fetch("/config.json", { cache: "no-store" })).json();
+    SERVER = config.server_url;
+    AUTH = { Authorization: "Bearer " + config.dashboard_key };
+  } catch {
+    setStatus("not started", "down");
+    showMessage("Open this dashboard with `bsecured dashboard` in your application's folder.");
+    return;
+  }
+  for (;;) {
+    try {
+      await loadRecent();     // also catches up on anything missed while disconnected
+      await readStream();
+    } catch (err) {
+      if (err instanceof InvalidKey) {
+        setStatus("key rejected", "down");
+        showMessage("The server did not accept this application's dashboard key.");
+        return;
+      }
+    }
+    setStatus("reconnecting…", "down");
+    await new Promise(r => setTimeout(r, 3000));
+  }
+}
+
+run();
+</script>
+</body>
+</html>
