@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# C++ / CMake
+build/
+cmake-build-*/
+*.o
+*.a
+
+# Secrets — never commit real connection strings, dashboard keys, or device seeds
+.env
+*.seed
+.bsecured/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
