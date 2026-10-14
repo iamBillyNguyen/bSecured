@@ -1,0 +1,17 @@
+{
+  "name": "bsecured-server",
+  "version": "0.1.0",
+  "description": "bSecured telemetry ingestion API and live dashboard",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

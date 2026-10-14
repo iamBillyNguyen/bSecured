@@ -5,15 +5,20 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
+# Node (server) — node_modules is rebuilt by `npm install`; keep package-lock.json
+node_modules/
+npm-debug.log*
+
 # C++ / CMake
 build/
 cmake-build-*/
 *.o
 *.a
 
-# Secrets — never commit real connection strings, dashboard keys, or device seeds
+# Secrets — never commit connection strings, keys, seeds, or TLS material
 .env
 *.seed
+*.pem
 .bsecured/
 
 # Editors / OS
