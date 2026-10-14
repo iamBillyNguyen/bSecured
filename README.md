@@ -44,7 +44,7 @@ this file is the setup, run, and test guide for the whole prototype.
 ## Special software, hardware, and access needed
 
 **Software.** **Node.js 18 or newer and npm** for the server. **Python 3.11+ with
-`pynacl`** for the `bsecured` tool. For the guard: a C++17 compiler, CMake **3.29 or
+`pynacl`** for the `bsecured` tool. For the guard: a C++17 compiler, CMake **3.28 or
 newer** (the injection mechanism needs it), OpenSSL (libraries and the `openssl`
 command), libcurl built against OpenSSL, and libsodium. Exact packages and install
 commands are in [Dependencies](#dependencies). For the full interception
@@ -72,7 +72,7 @@ memory** — there is no database to set up (persistence is deferred to COMP 890
 | Node.js ≥ 18 + npm | the server | `nodejs npm` | `node` |
 | Python 3.11+ | the `bsecured` tool | `python3 python3-venv` | `python3` |
 | C++17 compiler, Make | build the guard and the sample | `build-essential` | Xcode command-line tools |
-| CMake ≥ 3.29 | guard injection (`CMAKE_PROJECT_TOP_LEVEL_INCLUDES`) | `cmake` | `cmake` |
+| CMake ≥ 3.28 | guard injection (`CMAKE_PROJECT_TOP_LEVEL_INCLUDES`) | `cmake` | `cmake` |
 | OpenSSL (dev + CLI) | the guard's TLS pin check; the tool computes the pin | `libssl-dev openssl` | `openssl@3` |
 | libcurl (OpenSSL) | the guard sends the signed report | `libcurl4-openssl-dev` | ships with macOS |
 | libsodium | Ed25519 signing in the guard | `libsodium-dev` | `libsodium` |

@@ -65,7 +65,7 @@ DEFAULT_BUILD_COMMAND = "cmake --build ."
 STATE_DIR = ".bsecured"
 GUARD_DIR = pathlib.Path(__file__).resolve().parents[1] / "guard"
 POLL_SECONDS = 5
-MIN_CMAKE_FOR_INJECTION = (3, 29)  # CMAKE_PROJECT_TOP_LEVEL_INCLUDES
+MIN_CMAKE_FOR_INJECTION = (3, 28)  # CMAKE_PROJECT_TOP_LEVEL_INCLUDES (3.24+); 3.28 matches Ubuntu 24.04 LTS
 # Skipped when copying the project, so build trees, VCS data and bSecured's own
 # state never travel into the copy.
 COPY_IGNORE = shutil.ignore_patterns(".git", STATE_DIR, "build", "cmake-build-*",
