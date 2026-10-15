@@ -20,6 +20,11 @@ certificate and its key:
 BSEC_TLS_CERT=dev-cert.pem BSEC_TLS_KEY=dev-key.pem node server.js   # HTTPS
 ```
 
+An HTTPS server reloads its certificate on **`SIGHUP`** (`kill -HUP <pid>`) without
+a restart: it re-reads `BSEC_TLS_CERT`/`BSEC_TLS_KEY` and swaps them on the live
+listener, so the in-memory store, registered devices, and the dashboard's SSE stream
+all survive. This is how a rotated key reaches a pinning guard during a demo.
+
 Configuration is read from the environment (see `.env.example`): `BSEC_HOST`,
 `BSEC_PORT`, `BSEC_MAX_BODY_BYTES`, and the two `BSEC_TLS_*` paths. Nothing here
 is secret — the server stores no keys.

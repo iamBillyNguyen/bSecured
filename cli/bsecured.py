@@ -1,7 +1,7 @@
 """bsecured: build a CMake application with the bSecured guard compiled in.
 
-    python bsecured.py --in <project> [--out DIR] [--seed STRING]
-                       [--build-command CMD] [--expect-pin PIN] [--no-guard]
+    python bsecured.py --in <project> [--out DIR] [--seed STRING] [--build-command CMD]
+    python bsecured.py dashboard [DIR]      # open a built application's live dashboard
 
 The project at --in is only ever read. bSecured copies it into a build directory
 (default: a sibling folder named "<project>-bsecured") and does everything there,
@@ -12,19 +12,22 @@ the bSecured server under the application's dashboard key. Pass --seed to derive
 signing key from a fixed string (the same string gives the same key); the device id
 is still new each build.
 
-A guarded build pins the server's certificate: the CLI reads the server's public
-key, hashes it, and compiles that hash into the binary. At runtime the guard
-compares what the server presents against it and reports a mismatch. This needs
-an https server, so set BSEC_SERVER_URL to the https endpoint. Use --no-guard to
-build without the guard (any server), which is only useful during development.
+Every build pins the server's certificate: the CLI reads the server's public key,
+hashes it, and compiles that hash into the binary. At runtime the guard compares
+what the server presents against it and reports a mismatch. This needs an https
+server, so set BSEC_SERVER_URL to the https endpoint.
 
 The certificate is read over a verified connection when the server is publicly
 trusted, so a man-in-the-middle at build time cannot substitute the key being
 pinned. A server the system does not trust (a self-signed dev server) is trusted
-on first use, and its key pin is printed; pass --expect-pin to require a known one.
+on first use, and its key pin is printed.
 
 The server is http://127.0.0.1:8000 unless BSEC_SERVER_URL names another. Once
 the hosted server exists, its https address becomes the default.
+
+After a build, `bsecured dashboard [DIR]` opens that application's live dashboard
+in a browser: it serves the page on loopback and hands it the dashboard key, which
+never travels in a link. DIR is the build directory (default: the current folder).
 
 The build directory holds the project copy and all state under .bsecured/, which
 must never be committed:
@@ -64,6 +67,7 @@ DEFAULT_SERVER = "http://127.0.0.1:8000"
 DEFAULT_BUILD_COMMAND = "cmake --build ."
 STATE_DIR = ".bsecured"
 GUARD_DIR = pathlib.Path(__file__).resolve().parents[1] / "guard"
+DASHBOARD_PAGE = pathlib.Path(__file__).resolve().parents[1] / "dashboard" / "index.html"
 POLL_SECONDS = 5
 MIN_CMAKE_FOR_INJECTION = (3, 28)  # CMAKE_PROJECT_TOP_LEVEL_INCLUDES (3.24+); 3.28 matches Ubuntu 24.04 LTS
 # Skipped when copying the project, so build trees, VCS data and bSecured's own
@@ -305,8 +309,8 @@ def run_build_command(command: str, build_dir: pathlib.Path) -> None:
         raise BuildError(f"the build command `{command}` failed; see its output above")
 
 
-def build(src: pathlib.Path, seed_text: str | None, server: str, inject_guard: bool,
-          expect_pin: str | None, build_command: str, out: pathlib.Path | None) -> None:
+def build(src: pathlib.Path, seed_text: str | None, server: str, build_command: str,
+          out: pathlib.Path | None, inject_guard: bool = True) -> None:
     src = src.resolve()
     if not (src / "CMakeLists.txt").is_file():
         raise BuildError(f"{src} has no CMakeLists.txt; point --in at the project's root folder")
@@ -320,7 +324,7 @@ def build(src: pathlib.Path, seed_text: str | None, server: str, inject_guard: b
         if parts.scheme != "https":
             raise BuildError(
                 f"a guarded build pins the server certificate, so it needs an https server, not {server!r}.\n"
-                "        Set BSEC_SERVER_URL to the https endpoint, or pass --no-guard to build without the guard.")
+                "        Set BSEC_SERVER_URL to the https endpoint.")
         if cmake_version(cmake) < MIN_CMAKE_FOR_INJECTION:
             need = ".".join(map(str, MIN_CMAKE_FOR_INJECTION))
             raise BuildError(f"guard injection needs CMake >= {need}; found an older cmake")
@@ -353,16 +357,10 @@ def build(src: pathlib.Path, seed_text: str | None, server: str, inject_guard: b
         cafile.write_text(ssl.DER_cert_to_PEM_cert(cert_der))
         pin = spki_pin(cert_der)
         report_ca = "" if trusted else str(cafile)
-        if expect_pin and expect_pin != pin:
-            raise BuildError(f"the server's key pin is {pin}, not the --expect-pin value; refusing to build")
         if not trusted:
             print(f"warning: {host}:{port} is not publicly trusted; trusting its certificate on first use",
                   file=sys.stderr)
             print(f"         server key pin: {pin}", file=sys.stderr)
-            if not expect_pin:
-                print("         pass --expect-pin <pin> to require exactly this key next time", file=sys.stderr)
-    elif expect_pin:
-        raise BuildError("--expect-pin needs an https server")
 
     seed = seed_from(seed_text) if seed_text else os.urandom(32)
     public_key = bytes(SigningKey(seed).verify_key)
@@ -419,13 +417,121 @@ def build(src: pathlib.Path, seed_text: str | None, server: str, inject_guard: b
     if inject_guard:
         print(f"guard:   injected into {checked} source file(s); pinned to the server certificate")
     else:
-        print("guard:   not injected (--no-guard)")
+        print("guard:   not injected")
+
+    print("\nTo watch for detections live, open this application's dashboard:")
+    print(f"    {sys.executable} {sys.argv[0]} dashboard {shlex.quote(os.path.relpath(workspace))}")
+
+
+def serve_dashboard(server_url: str, key: str, port: int, open_browser: bool) -> None:
+    """Serve this application's dashboard on loopback and open it in a browser.
+
+    The page is served on 127.0.0.1 only and is handed the server address and the
+    dashboard key through /config.json, so the key never appears in a link or in
+    browser history. Any Host header but our own is refused, so a page that rebinds
+    its name to 127.0.0.1 cannot read the key. Runs until Ctrl+C.
+    @param server_url the bSecured server the dashboard reads from
+    @param key the application's dashboard key
+    @param port the loopback port to serve on (0 picks a free one)
+    @param open_browser whether to open the page in a browser
+    """
+    import http.server
+    import socketserver
+    import webbrowser
+
+    class LoopbackServer(http.server.HTTPServer):
+        def server_bind(self) -> None:
+            # Skip the reverse-DNS lookup HTTPServer does here: it can stall for
+            # seconds and the name is never used.
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.headers.get("Host") not in self.server.allowed_hosts:
+                self.send_error(403)
+                return
+            if self.path == "/":
+                body, content_type = self.server.page, "text/html; charset=utf-8"
+            elif self.path == "/config.json":
+                body, content_type = self.server.config, "application/json"
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args) -> None:
+            pass  # keep the terminal quiet
+
+    httpd = LoopbackServer(("127.0.0.1", port), Handler)
+    bound = httpd.server_address[1]
+    httpd.page = DASHBOARD_PAGE.read_bytes()
+    httpd.config = json.dumps({"server_url": server_url.rstrip("/"), "dashboard_key": key}).encode()
+    httpd.allowed_hosts = {f"127.0.0.1:{bound}", f"localhost:{bound}"}
+
+    url = f"http://127.0.0.1:{bound}/"
+    print(f"dashboard: {url}   (Ctrl+C to stop)", flush=True)
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+def dashboard_command(argv: list[str]) -> int:
+    """Open a built application's live dashboard.
+
+    DIR is the build directory holding .bsecured/ (default: the current folder). The
+    dashboard reads from the server the build registered with, unless --url overrides.
+    @param argv the arguments after the 'dashboard' subcommand
+    @returns the process exit code
+    """
+    parser = argparse.ArgumentParser(
+        prog="bsecured dashboard",
+        description="Open a built application's live dashboard in a browser.")
+    parser.add_argument("dir", nargs="?", type=pathlib.Path, default=pathlib.Path("."), metavar="DIR",
+                        help="the build directory holding .bsecured/ (default: the current folder)")
+    parser.add_argument("--url", default=None, metavar="URL",
+                        help="the bSecured server to read from (default: the one this build used)")
+    parser.add_argument("--port", type=int, default=0, help="loopback port to serve on (0 picks a free one)")
+    parser.add_argument("--no-browser", action="store_true", help="print the URL but do not open a browser")
+    args = parser.parse_args(argv)
+
+    state = args.dir / STATE_DIR
+    key_file = state / "dashboard_key"
+    if not key_file.exists():
+        print(f"bsecured: no {key_file}; run a build first, or pass the build directory "
+              f"(the folder holding {STATE_DIR}/)", file=sys.stderr)
+        return 1
+
+    server = args.url
+    manifest = state / "build.json"
+    if server is None and manifest.exists():
+        try:
+            server = json.loads(manifest.read_text()).get("server")
+        except (OSError, ValueError):
+            server = None
+    server = (server or os.environ.get("BSEC_SERVER_URL") or DEFAULT_SERVER).rstrip("/")
+
+    serve_dashboard(server, key_file.read_text().strip(), args.port, not args.no_browser)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "dashboard":
+        return dashboard_command(argv[1:])
+
     parser = argparse.ArgumentParser(
         prog="bsecured", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=f"The server is $BSEC_SERVER_URL, or {DEFAULT_SERVER} if it is unset.")
+        epilog=f"The server is $BSEC_SERVER_URL, or {DEFAULT_SERVER} if it is unset.\n"
+               "Run 'bsecured dashboard [DIR]' to open a built application's live dashboard.")
     parser.add_argument("--in", dest="src", type=pathlib.Path, required=True, metavar="DIR",
                         help="the project root holding the top-level CMakeLists.txt (read only; never modified)")
     parser.add_argument("--out", dest="out", type=pathlib.Path, default=None, metavar="DIR",
@@ -433,14 +539,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", help="any string; the signing key is derived from it (random if omitted)")
     parser.add_argument("--build-command", dest="build_command", default=DEFAULT_BUILD_COMMAND, metavar="CMD",
                         help=f"command run in the build tree to compile (default: {DEFAULT_BUILD_COMMAND!r})")
-    parser.add_argument("--expect-pin", help="refuse to build unless the server's key pin matches this value")
-    parser.add_argument("--no-guard", action="store_true", help="build without the guard (development only)")
     args = parser.parse_args(argv)
 
     server = (os.environ.get("BSEC_SERVER_URL") or DEFAULT_SERVER).rstrip("/")
     try:
-        build(args.src, args.seed, server, inject_guard=not args.no_guard,
-              expect_pin=args.expect_pin, build_command=args.build_command, out=args.out)
+        build(args.src, args.seed, server, build_command=args.build_command, out=args.out)
     except BuildError as error:
         print(f"bsecured: {error}", file=sys.stderr)
         return 1

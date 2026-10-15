@@ -47,8 +47,9 @@ this file is the setup, run, and test guide for the whole prototype.
 `pynacl`** for the `bsecured` tool. For the guard: a C++17 compiler, CMake **3.28 or
 newer** (the injection mechanism needs it), OpenSSL (libraries and the `openssl`
 command), libcurl built against OpenSSL, and libsodium. Exact packages and install
-commands are in [Dependencies](#dependencies). For the full interception
-demonstration, an interception proxy such as **mitmproxy**.
+commands are in [Dependencies](#dependencies). The full interception demonstration
+additionally uses a local certificate authority trusted by the system, created with
+the `openssl` command already listed above — no extra software is required.
 
 **Hardware.** The prototype runs on a single Linux machine (or macOS for
 development). The **graded deliverable targets two Linux machines on different glibc
@@ -73,17 +74,18 @@ memory** — there is no database to set up (persistence is deferred to COMP 890
 | Python 3.11+ | the `bsecured` tool | `python3 python3-venv` | `python3` |
 | C++17 compiler, Make | build the guard and the sample | `build-essential` | Xcode command-line tools |
 | CMake ≥ 3.28 | guard injection (`CMAKE_PROJECT_TOP_LEVEL_INCLUDES`) | `cmake` | `cmake` |
+| pkg-config | lets CMake locate libsodium during the guard build | `pkg-config` | `pkg-config` |
 | OpenSSL (dev + CLI) | the guard's TLS pin check; the tool computes the pin | `libssl-dev openssl` | `openssl@3` |
 | libcurl (OpenSSL) | the guard sends the signed report | `libcurl4-openssl-dev` | ships with macOS |
 | libsodium | Ed25519 signing in the guard | `libsodium-dev` | `libsodium` |
 
 ```bash
 # Ubuntu / Debian
-sudo apt install nodejs npm python3 python3-venv build-essential cmake \
+sudo apt install nodejs npm python3 python3-venv build-essential cmake pkg-config \
                  libssl-dev libcurl4-openssl-dev libsodium-dev openssl
 
 # macOS
-brew install node cmake openssl@3 libsodium       # Python 3 and curl are already present
+brew install node cmake pkg-config openssl@3 libsodium   # Python 3 and curl are already present
 ```
 
 ### Language packages
@@ -148,9 +150,16 @@ BSEC_SERVER_URL=https://127.0.0.1:8443 \
 
 The tool copies `sample-project/` to a sibling `sample-project-bsecured/` (**the
 original is never modified**), registers a device, injects the guard into all three
-source files, and builds. It prints `guard: injected into 3 source file(s)`. Because
-the server is self-signed it also prints the server's key pin (trust on first use);
-pass `--expect-pin <pin>` to require a known one.
+source files, and builds. It prints `guard: injected into 3 source file(s)`, the
+server's key pin (trust on first use, because the dev server is self-signed), and a
+command to open this application's live dashboard:
+
+```bash
+.venv/bin/python cli/bsecured.py dashboard sample-project-bsecured
+```
+
+That command serves the dashboard on loopback and hands the page the application's
+dashboard key through `/config.json`, so the key never travels in a link.
 
 ```bash
 # 4. Good path: the pinned key matches, so the guard stays silent
@@ -172,9 +181,10 @@ sample-project-bsecured/.bsecured/guard-build/bsecured_probe        # -> pin: MI
 
 **Success:** `MATCH` on the original certificate and `MISMATCH` on the swapped one,
 and the guarded `notes` sends no report while the pin matches. That is the anti-MitM
-detection working. (Delivering that detection *through* a live interceptor needs the
-report channel to trust the proxy's certificate authority — see the full demo note
-and "What is simulated" below.)
+detection working. (Delivering a detection to the dashboard needs the report channel
+to trust the *new* certificate too — a server whose certificate authority the system
+trusts; the full demo below does exactly that, and rotates the key to trigger the
+mismatch. See "What is simulated" below.)
 
 ### Track 3 — Live server and dashboard (authenticated ingestion, shown live)
 
@@ -201,16 +211,83 @@ node server.js
 about a second); `--forge` is rejected (401) and never appears; opening the dashboard
 needs the application's key.
 
-### Full interception demonstration (the recorded video)
+### Full interception demonstration — certificate rotation (the recorded demo)
 
-The complete guard → server → dashboard path under a real interceptor is the scenario
-for the demo video. It needs a server with a certificate the endpoint trusts (the
-deployed instance, or a local certificate authority you install) and an interception
-proxy (e.g. `mitmproxy`) whose certificate authority is in the endpoint's system
-trust store. The guarded application is built against that server, run behind the
-proxy, and the pin mismatch is detected and delivered, appearing on the dashboard as
-a `MITM_PIN_FAILURE`. This is also where the two-machine (two-distribution) setup is
-exercised. See `guard/README.md` and `server/README.md`.
+This is the scenario for the demo video: the guarded application detects that the key
+on the wire no longer matches the key it pinned, and its signed report appears on the
+dashboard **live** as a `MITM_PIN_FAILURE`. Interception is simulated by **rotating
+the server's key** — the exact effect a man-in-the-middle has on a pinning client —
+which exercises the identical detect → sign → report → stream path a real proxy would
+trigger. (A literal external interceptor such as `mitmproxy` is a heavier variant: it
+needs the proxy's certificate authority in the system trust store and transparent
+redirection of the pinned connection.)
+
+The report leaves over the **system trust store**, so both the original and the
+rotated certificate are signed by one local certificate authority (CA) the system
+trusts: the pin catches the key change, while the report still gets out. This is the
+"corporate-inspection" path the guard is designed for.
+
+**One-time setup — a local CA the system trusts (in the Linux VM):**
+
+```bash
+cd server
+
+# A local demo CA, trusted system-wide
+openssl req -x509 -newkey rsa:2048 -nodes -days 7 \
+  -keyout demo-ca-key.pem -out demo-ca-cert.pem -subj "/CN=bSecured demo CA"
+sudo cp demo-ca-cert.pem /usr/local/share/ca-certificates/bsecured-demo-ca.crt
+sudo update-ca-certificates
+
+# Let Firefox use the system store too: open about:config and set
+#   security.enterprise_roots.enabled = true
+```
+
+**Run the demo:**
+
+```bash
+# 1. Issue the server's first certificate from the CA (SAN for 127.0.0.1). The same
+#    two commands are used again in step 6 to rotate the key.
+cd server
+openssl req -newkey rsa:2048 -nodes -keyout server-key.pem -out server.csr \
+  -subj "/CN=127.0.0.1"
+openssl x509 -req -in server.csr -CA demo-ca-cert.pem -CAkey demo-ca-key.pem \
+  -CAcreateserial -days 7 -out server-cert.pem \
+  -extfile <(printf "subjectAltName=IP:127.0.0.1")
+
+# 2. Start the server over HTTPS with that certificate (leave running)
+BSEC_PORT=8443 BSEC_TLS_CERT=server-cert.pem BSEC_TLS_KEY=server-key.pem node server.js
+
+# 3. Second terminal, repository root: build the sample WITH the guard
+BSEC_SERVER_URL=https://127.0.0.1:8443 \
+  .venv/bin/python cli/bsecured.py --in sample-project --seed demo-seed
+#    The CA is trusted, so the build must NOT print a "not publicly trusted" warning.
+#    If it does, the CA is not installed correctly and the report will not be delivered
+#    after rotation — fix the trust store before recording.
+
+# 4. Open this application's live dashboard (opens Firefox; leave it on screen)
+.venv/bin/python cli/bsecured.py dashboard sample-project-bsecured
+
+# 5. Third terminal: run the guarded app. The guard polls every 5 s; the pin matches,
+#    so the dashboard stays clear — the "all clear" beat of the demo.
+sample-project-bsecured/.bsecured/build/notes      # type a few commands; leave it running
+
+# 6. Rotate the key: issue a NEW certificate from the SAME CA and reload the running
+#    server with SIGHUP — no restart, so the in-memory store and the dashboard's live
+#    stream both survive.
+cd server
+openssl req -newkey rsa:2048 -nodes -keyout server-key.pem -out server.csr \
+  -subj "/CN=127.0.0.1"
+openssl x509 -req -in server.csr -CA demo-ca-cert.pem -CAkey demo-ca-key.pem \
+  -CAcreateserial -days 7 -out server-cert.pem \
+  -extfile <(printf "subjectAltName=IP:127.0.0.1")
+kill -HUP "$(pgrep -f 'node server.js')"
+```
+
+**Success:** within about 5 seconds the guard's next poll sees the new key, and a
+`MITM_PIN_FAILURE` **pushes onto the dashboard live**. Its evidence carries the
+observed key, the certificate issuer, and `system_trust_ok: true` — the realistic
+fingerprint of a trusted-looking interceptor. This is also where the two-machine
+(two-distribution) setup is exercised. See `guard/README.md` and `server/README.md`.
 
 ## What is implemented, reused, and simulated
 
@@ -233,9 +310,11 @@ verification); PyNaCl and libsodium (Ed25519 signing); OpenSSL; libcurl; CMake.
 * The two server-side scripts (`server/scripts/devices.py`, `send_report.py`) stand in
   for a reporting guard so the server can be exercised without a C++ build.
 * Local tracks use a self-signed server. Because the guard pins a self-signed server's
-  exact certificate for its report channel, a report cannot be *delivered* through an
-  interceptor locally — detection still fires; delivery through a proxy is shown in the
-  full demo against a trusted-certificate server.
+  exact certificate for its report channel, a report cannot be *delivered* once that
+  certificate changes locally — detection still fires, but delivery needs a server whose
+  certificate authority the system trusts. The full demo uses exactly that (a local CA)
+  and simulates interception by rotating the server's key, rather than running a
+  separate proxy process.
 
 **Not in the prototype (designed, deferred):** anti-debugging and tamper-detection
 guards; classifying benign interception (corporate proxy, captive portal) from

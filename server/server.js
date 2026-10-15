@@ -513,4 +513,27 @@ if (require.main === module)
     const scheme = process.env.BSEC_TLS_KEY && process.env.BSEC_TLS_CERT ? "https" : "http";
     console.log(`bSecured server on ${scheme}://${HOST}:${PORT} (in-memory store)`);
   });
+
+  // TODO: To be removed once DB is hosted because manually reloading TSL cert kills in memory store which includes device registration and the dashboard's live SSE connections
+  // Hot-reload the TLS certificate on SIGHUP, without a restart. An HTTPS server
+  // re-reads its key and cert and swaps them on the live listener, so a rotated key
+  // reaches a pinning guard (which then reports the change) while the in-memory
+  // store, the registered devices, and the dashboard's live SSE stream all survive.
+  // A plain HTTP server has no certificate, so the signal is ignored.
+  const keyPath = process.env.BSEC_TLS_KEY;
+  const certPath = process.env.BSEC_TLS_CERT;
+  if (keyPath && certPath)
+  {
+    process.on("SIGHUP", () => {
+      try
+      {
+        server.setSecureContext({ key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) });
+        console.log("TLS certificate reloaded (SIGHUP)");
+      }
+      catch (error)
+      {
+        console.error(`TLS reload failed: ${error.message}`);
+      }
+    });
+  }
 }
