@@ -227,54 +227,51 @@ rotated certificate are signed by one local certificate authority (CA) the syste
 trusts: the pin catches the key change, while the report still gets out. This is the
 "corporate-inspection" path the guard is designed for.
 
-**One-time setup — a local CA the system trusts (in the Linux VM):**
+**Run the demo (all in the Linux VM):**
 
 ```bash
 cd server
 
-# A local demo CA, trusted system-wide
+# 1. ONE-TIME — create a local CA the system trusts, and let Firefox use the system
+#    store too. Skip this step on later runs; the CA persists. (Do NOT reuse an old
+#    self-signed server cert here — it will not be trusted and delivery will fail.)
 openssl req -x509 -newkey rsa:2048 -nodes -days 7 \
   -keyout demo-ca-key.pem -out demo-ca-cert.pem -subj "/CN=bSecured demo CA"
 sudo cp demo-ca-cert.pem /usr/local/share/ca-certificates/bsecured-demo-ca.crt
-sudo update-ca-certificates
+sudo update-ca-certificates                      # must print "1 added"
+#    Firefox: about:config -> security.enterprise_roots.enabled = true
 
-# Let Firefox use the system store too: open about:config and set
-#   security.enterprise_roots.enabled = true
-```
-
-**Run the demo:**
-
-```bash
-# 1. Issue the server's first certificate from the CA (SAN for 127.0.0.1). The same
-#    two commands are used again in step 6 to rotate the key.
-cd server
+# 2. Issue the server's certificate FROM that CA (SAN for 127.0.0.1). The same two
+#    commands are re-run in step 8 to rotate the key.
 openssl req -newkey rsa:2048 -nodes -keyout server-key.pem -out server.csr \
   -subj "/CN=127.0.0.1"
 openssl x509 -req -in server.csr -CA demo-ca-cert.pem -CAkey demo-ca-key.pem \
   -CAcreateserial -days 7 -out server-cert.pem \
   -extfile <(printf "subjectAltName=IP:127.0.0.1")
 
-# 2. Start the server over HTTPS with that certificate (leave running)
+# 3. CHECKPOINT: confirm the cert chains to the now-trusted CA.
+openssl verify -CAfile /etc/ssl/certs/ca-certificates.crt server-cert.pem
+#    -> must print "server-cert.pem: OK"
+
+# 4. Start the server over HTTPS with that certificate (leave running)
 BSEC_PORT=8443 BSEC_TLS_CERT=server-cert.pem BSEC_TLS_KEY=server-key.pem node server.js
 
-# 3. Second terminal, repository root: build the sample WITH the guard
+# 5. Second terminal, repository root: build the sample WITH the guard.
+#    CHECKPOINT: it must NOT print "not publicly trusted". If it does, step 1/2 did not
+#    take, and the report will not be delivered after rotation — fix that before going on.
 BSEC_SERVER_URL=https://127.0.0.1:8443 \
   .venv/bin/python cli/bsecured.py --in sample-project --seed demo-seed
-#    The CA is trusted, so the build must NOT print a "not publicly trusted" warning.
-#    If it does, the CA is not installed correctly and the report will not be delivered
-#    after rotation — fix the trust store before recording.
 
-# 4. Open this application's live dashboard (opens Firefox; leave it on screen)
+# 6. Open this application's live dashboard (opens Firefox; leave it on screen)
 .venv/bin/python cli/bsecured.py dashboard sample-project-bsecured
 
-# 5. Third terminal: run the guarded app. The guard polls every 5 s; the pin matches,
+# 7. Third terminal: run the guarded app. The guard polls every 5 s; the pin matches,
 #    so the dashboard stays clear — the "all clear" beat of the demo.
 sample-project-bsecured/.bsecured/build/notes      # type a few commands; leave it running
 
-# 6. Rotate the key: issue a NEW certificate from the SAME CA and reload the running
-#    server with SIGHUP — no restart, so the in-memory store and the dashboard's live
-#    stream both survive.
-cd server
+# 8. Rotate the key: issue a NEW certificate from the SAME CA (re-run step 2's two
+#    commands), then reload the running server with SIGHUP — no restart, so the
+#    in-memory store and the dashboard's live stream both survive.
 openssl req -newkey rsa:2048 -nodes -keyout server-key.pem -out server.csr \
   -subj "/CN=127.0.0.1"
 openssl x509 -req -in server.csr -CA demo-ca-cert.pem -CAkey demo-ca-key.pem \
