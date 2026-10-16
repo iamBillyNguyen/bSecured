@@ -26,26 +26,17 @@ using namespace std;
 namespace bsecured {
 namespace {
 
-/**
- * Base64-encodes bytes, standard variant with padding
- * Matches Python's base64.b64encode, which is what the server decodes.
- * @param data the bytes to encode
- * @param len how many bytes
- * @returns the base64 string
- */
+// Base64-encodes bytes, standard variant with padding. Matches Python's
+// base64.b64encode, which is what the server decodes.
 string base64(const unsigned char* data, size_t len)
 {
     string out(sodium_base64_encoded_len(len, sodium_base64_VARIANT_ORIGINAL), '\0');
     sodium_bin2base64(out.data(), out.size(), data, len, sodium_base64_VARIANT_ORIGINAL);
-    out.pop_back(); // sodium counts a trailing NUL in the length
+    out.pop_back(); // Sodium counts a trailing NUL in the length
     return out;
 }
 
-/**
- * Escapes a string so it is safe inside a JSON string value
- * @param s the raw string
- * @returns the escaped string
- */
+// Escapes a string so it is safe inside a JSON string value.
 string json_escape(const string& s)
 {
     string o;
@@ -76,10 +67,8 @@ string json_escape(const string& s)
     return o;
 }
 
-/**
- * Gets the current UTC time as an ISO 8601 string with milliseconds
- * @returns the timestamp, e.g. 2026-10-13T18:22:04.113Z
- */
+// Gets the current UTC time as an ISO 8601 string with milliseconds,
+// e.g. 2026-10-13T18:22:04.113Z.
 string now_iso_utc()
 {
     using namespace std::chrono;
@@ -89,17 +78,16 @@ string now_iso_utc()
     tm tm{};
     gmtime_r(&t, &tm);
 
-    char buf[32];
+    // The real timestamp is 24 chars; the generous size also satisfies GCC's
+    // -Wformat-truncation, which conservatively assumes full int width per %d field.
+    char buf[128];
     snprintf(buf, sizeof buf, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
              tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<int>(ms.count()));
     return buf;
 }
 
-/**
- * Finds the first proxy environment variable that is set
- * @returns the variable's name, or "" if none is set
- */
+// Finds the first proxy environment variable that is set, returning its name, or "".
 string proxy_env_name()
 {
     for (const char* name : {"https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"})
@@ -112,11 +100,7 @@ string proxy_env_name()
     return "";
 }
 
-/**
- * Reads a certificate's issuer as a one-line string
- * @param cert the certificate to read
- * @returns the issuer line
- */
+// Reads a certificate's issuer as a one-line string.
 string issuer_of(X509* cert)
 {
     char line[256];
@@ -124,32 +108,22 @@ string issuer_of(X509* cert)
     return line;
 }
 
-}  // namespace
+}
 
-/**
- * The SPKI pin compiled into this build, exposed for the probe tool
- * @returns the pinned base64 SHA-256 of the server's SPKI
- */
+// The SPKI pin compiled into this build, exposed for the probe tool.
 string pinned_spki()
 {
     return BSEC_PINNED_SPKI;
 }
 
-/**
- * The device id compiled into this build, exposed for the probe tool
- * @returns the device id
- */
+// The device id compiled into this build, exposed for the probe tool.
 string device_id()
 {
     return BSEC_DEVICE_ID;
 }
 
-/**
- * Connects to the configured server, completes the TLS handshake, and reads the
- * leaf certificate. Verification is observed but not enforced, so the guard can
- * see what an interceptor presents; the pin, not the chain, is the detection.
- * @returns what the connection revealed; connected is false on any failure
- */
+// Connects to the configured server, completes the TLS handshake, and reads the leaf
+// certificate.
 Observation probe()
 {
     Observation obs;
@@ -211,19 +185,15 @@ Observation probe()
     }
 
     SSL_CTX_free(ctx);
-    ERR_clear_error(); // leave no error on the thread's OpenSSL queue
+    ERR_clear_error(); // Leave no error on the thread's OpenSSL queue
     return obs;
 }
 
 namespace {
 
-/**
- * Builds the report JSON by hand, so the exact bytes are what gets signed
- * Field order matches the server's model; the server verifies over these bytes
- * and never re-serializes. Evidence values are base64 (safe) or escaped.
- * @param obs the observation to report
- * @returns the JSON body
- */
+// Builds the report JSON by hand, so the exact bytes are what gets signed. Field order
+// matches the server's model; the server verifies over these bytes and never
+// re-serializes. Evidence values are base64 (safe) or escaped.
 string build_report_json(const Observation& obs)
 {
     string json = "{";
@@ -241,11 +211,8 @@ string build_report_json(const Observation& obs)
     return json;
 }
 
-/**
- * Signs the message with the build's Ed25519 seed
- * @param message the exact bytes to sign
- * @returns the base64 signature, or "" if the seed is misconfigured
- */
+// Signs the message with the build's Ed25519 seed, returning the base64 signature,
+// or "" if the seed is misconfigured.
 string sign_b64(const string& message)
 {
     unsigned char seed[crypto_sign_SEEDBYTES];
@@ -254,7 +221,7 @@ string sign_b64(const string& message)
                           nullptr, &seed_len, nullptr, sodium_base64_VARIANT_ORIGINAL) != 0 ||
         seed_len != sizeof seed)
     {
-        return ""; // misconfigured seed
+        return ""; // Misconfigured seed
     }
 
     unsigned char pk[crypto_sign_PUBLICKEYBYTES], sk[crypto_sign_SECRETKEYBYTES];
@@ -267,23 +234,17 @@ string sign_b64(const string& message)
     return base64(sig, sizeof sig);
 }
 
-/**
- * libcurl write callback that discards the response body
- * @returns the number of bytes handled (all of them)
- */
+// libcurl write callback that discards the response body, returning the number of
+// bytes handled (all of them).
 size_t discard(char*, size_t size, size_t nmemb, void*)
 {
     return size * nmemb;
 }
 
-}  // namespace
+}
 
-/**
- * Builds a MITM_PIN_FAILURE report from the observation, signs it with the
- * build's Ed25519 seed, and POSTs it to the server. Never throws.
- * @param obs the observation to report
- * @returns true only on HTTP 200
- */
+// Builds a MITM_PIN_FAILURE report from the observation, signs it with the build's
+// Ed25519 seed, and POSTs it to the server. Returns true only on HTTP 200. Never throws.
 bool send_report(const Observation& obs)
 {
     if (!obs.connected)
@@ -330,4 +291,4 @@ bool send_report(const Observation& obs)
     return rc == CURLE_OK && status == 200;
 }
 
-}  // namespace bsecured
+}
