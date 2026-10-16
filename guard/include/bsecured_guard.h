@@ -8,14 +8,12 @@
 
 namespace bsecured
 {
-    /**
-     * Starts the background guard on the first call; later calls do nothing.
-     * Never throws and never blocks: safe to call from a static initializer.
-     */
+    // Starts the background guard on the first call; later calls do nothing.
+    // Never throws and never blocks: safe to call from a static initializer.
     void ensure_started() noexcept;
 }  // namespace bsecured
 
-namespace 
+namespace
 {
 // Force-including this header into N source files places N copies of this
 // initializer, one per file. Each calls ensure_started(), which starts the

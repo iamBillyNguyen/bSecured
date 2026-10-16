@@ -17,15 +17,13 @@ using namespace std;
 namespace bsecured {
 namespace {
 
-/**
- * The guard's background loop: check the server on an interval and report a
- * changed detection. Report-on-change policy:
- *   pin matches       -> re-arm, stay quiet (a recovery is not itself a report,
- *                        because the minimal server only accepts failures)
- *   new failing cert  -> report, then remember it
- *   same failing cert -> stay quiet
- * A send that fails leaves us armed, so the next poll retries. Runs forever.
- */
+// The guard's background loop: check the server on an interval and report a changed
+// detection. Report-on-change policy:
+//   pin matches       -> re-arm, stay quiet (a recovery is not itself a report,
+//                        because the minimal server only accepts failures)
+//   new failing cert  -> report, then remember it
+//   same failing cert -> stay quiet
+// A send that fails leaves us armed, so the next poll retries. Runs forever.
 void poll_forever()
 {
     // The SPKI of the last failure we reported. Empty means "armed".
@@ -59,13 +57,11 @@ void poll_forever()
     }
 }
 
-}  // namespace
+}
 
-/**
- * Starts the background guard on the first call; later calls do nothing
- * Initializes libsodium and libcurl, then launches the poll loop on a detached
- * thread. Never throws: if the guard cannot start, the application still runs.
- */
+// Starts the background guard on the first call; later calls do nothing.
+// Initializes libsodium and libcurl, then launches the poll loop on a detached
+// thread. Never throws: if the guard cannot start, the application still runs.
 void ensure_started() noexcept
 {
     static once_flag once;
@@ -87,4 +83,4 @@ void ensure_started() noexcept
     });
 }
 
-}  // namespace bsecured
+}
