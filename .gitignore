@@ -25,3 +25,5 @@ cmake-build-*/
 .vscode/
 .idea/
 .DS_Store
+.neon
+.env.local
