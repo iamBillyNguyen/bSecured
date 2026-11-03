@@ -1,0 +1,20 @@
+# Render Blueprint for the bSecured telemetry server.
+# Spec: https://render.com/docs/blueprint-spec
+# Use: Render dashboard -> New -> Blueprint -> connect this repo, or create a
+# Web Service manually with the same settings.
+services:
+  - type: web
+    name: bsecured-server
+    runtime: node
+    repo: https://github.com/iamBillyNguyen/bSecured
+    branch: milestone-1            # change to the branch you deploy from (e.g. main after merge)
+    rootDir: server               # the Node app lives in server/, not the repo root
+    plan: starter                 # always-on. The FREE plan sleeps when idle, which drops the
+                                  # dashboard's Server-Sent Events stream — do not use free for the live demo.
+    buildCommand: npm ci
+    startCommand: npm start       # node server.js; reads PORT + DATABASE_URL from the environment
+    healthCheckPath: /healthz     # returns {"ok":true,"store":"postgres"} once connected
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL         # Neon POOLED string (hostname contains "-pooler")
+        sync: false               # entered in the Render dashboard; the secret is never committed
