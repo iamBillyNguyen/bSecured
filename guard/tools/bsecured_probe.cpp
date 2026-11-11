@@ -33,9 +33,14 @@ int main(int argc, char** argv)
         printf("could not complete a TLS handshake with the server\n");
         return 1;
     }
-    const bool matches = obs.observed_spki == bsecured::pinned_spki();
+    const bool matches = bsecured::pin_matches(obs.observed_spki);
+    string pinned;
+    for (const string& p : bsecured::pinned_spkis())
+    {
+        pinned += (pinned.empty() ? "" : ", ") + p;
+    }
     printf("observed SPKI:    %s\n", obs.observed_spki.c_str());
-    printf("pinned SPKI:      %s\n", bsecured::pinned_spki().c_str());
+    printf("pinned SPKI set:  %s\n", pinned.empty() ? "(none)" : pinned.c_str());
     printf("pin:              %s\n", matches ? "MATCH" : "MISMATCH (interception?)");
     printf("issuer:           %s\n", obs.issuer.c_str());
     printf("system trust ok:  %s\n", obs.system_trust_ok ? "yes" : "no");

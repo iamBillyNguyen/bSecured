@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace bsecured {
 
@@ -21,8 +22,13 @@ Observation probe();
 // Ed25519 seed, and posts it to the server. Returns true only on HTTP 200. Never throws.
 bool send_report(const Observation& obs);
 
-// The SPKI pin compiled into this build, exposed for the probe tool.
-std::string pinned_spki();
+// The set of acceptable server SPKI pins compiled into this build (the current pin
+// plus any backups), exposed for the probe tool.
+std::vector<std::string> pinned_spkis();
+
+// True if an observed leaf SPKI matches any pin in the compiled-in set. An empty
+// observation or an empty set never matches, so an unpinned build always reports.
+bool pin_matches(const std::string& observed_spki);
 
 // The device id compiled into this build, exposed for the probe tool.
 std::string device_id();

@@ -9,7 +9,7 @@
 #define BSEC_SERVER_HOST   "@BSEC_SERVER_HOST@"   // host for the TLS pin check
 #define BSEC_SERVER_PORT   "@BSEC_SERVER_PORT@"   // port for the TLS pin check
 #define BSEC_REPORT_URL    "@BSEC_REPORT_URL@"    // server base URL for POSTing reports
-#define BSEC_PINNED_SPKI   "@BSEC_PINNED_SPKI@"   // base64 SHA-256 of the server's expected SPKI
+#define BSEC_PINNED_SPKI   "@BSEC_PINNED_SPKI@"   // comma-separated set of acceptable base64 SHA-256 SPKI pins (current + backups)
 #define BSEC_DEVICE_ID     "@BSEC_DEVICE_ID@"     // this build's device id
 #define BSEC_BUILD_ID      "@BSEC_BUILD_ID@"      // this build's id
 #define BSEC_SEED_B64      "@BSEC_SEED_B64@"      // base64 32-byte Ed25519 signing seed

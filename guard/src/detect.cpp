@@ -110,10 +110,54 @@ string issuer_of(X509* cert)
 
 }
 
-// The SPKI pin compiled into this build, exposed for the probe tool.
-string pinned_spki()
+// The acceptable server SPKI pins compiled into this build. BSEC_PINNED_SPKI is a
+// comma-separated set: the current pin plus any backups (e.g. a planned replacement),
+// so a key rotation covered by the set does not raise a false alarm.
+vector<string> pinned_spkis()
 {
-    return BSEC_PINNED_SPKI;
+    vector<string> pins;
+    const string raw = BSEC_PINNED_SPKI;
+    size_t start = 0;
+    for (;;)
+    {
+        const size_t comma = raw.find(',', start);
+        const size_t end = (comma == string::npos) ? raw.size() : comma;
+        string pin = raw.substr(start, end - start);
+        const size_t a = pin.find_first_not_of(" \t\r\n");
+        const size_t b = pin.find_last_not_of(" \t\r\n");
+        if (a != string::npos)
+        {
+            pin = pin.substr(a, b - a + 1);
+            if (!pin.empty())
+            {
+                pins.push_back(pin);
+            }
+        }
+        if (comma == string::npos)
+        {
+            break;
+        }
+        start = comma + 1;
+    }
+    return pins;
+}
+
+// True if the observed leaf SPKI matches any pin in the set. An empty observation or
+// an empty set never matches.
+bool pin_matches(const string& observed_spki)
+{
+    if (observed_spki.empty())
+    {
+        return false;
+    }
+    for (const string& pin : pinned_spkis())
+    {
+        if (pin == observed_spki)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 // The device id compiled into this build, exposed for the probe tool.
