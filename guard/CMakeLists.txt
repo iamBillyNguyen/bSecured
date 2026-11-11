@@ -11,10 +11,10 @@ endif()
 
 # Compile-time configuration. The bSecured CLI passes these per build with
 # -D on the configure line; the defaults below only make a standalone build work.
-set(BSEC_SERVER_HOST  "127.0.0.1"              CACHE STRING "Host for the TLS pin check")
-set(BSEC_SERVER_PORT  "8443"                   CACHE STRING "Port for the TLS pin check")
-set(BSEC_REPORT_URL   "https://127.0.0.1:8443" CACHE STRING "Server base URL for reports")
-set(BSEC_PINNED_SPKI  ""                        CACHE STRING "base64 SHA-256 of the server SPKI")
+set(BSEC_SERVER_HOST  "bsecured-server.onrender.com"      CACHE STRING "Host for the TLS pin check")
+set(BSEC_SERVER_PORT  "443"                               CACHE STRING "Port for the TLS pin check")
+set(BSEC_REPORT_URL   "https://bsecured-server.onrender.com" CACHE STRING "Server base URL for reports")
+set(BSEC_PINNED_SPKI  ""                                  CACHE STRING "comma-separated set of acceptable base64 SHA-256 SPKI pins")
 set(BSEC_DEVICE_ID    "dev-unconfigured"       CACHE STRING "This build's device id")
 set(BSEC_BUILD_ID     "bsec-unconfigured"      CACHE STRING "This build's id")
 set(BSEC_SEED_B64     ""                        CACHE STRING "base64 32-byte Ed25519 seed")
