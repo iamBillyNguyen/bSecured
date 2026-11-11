@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 
 from nacl.signing import SigningKey
 
-DEFAULT_SERVER = "http://127.0.0.1:8000"
+DEFAULT_SERVER = "https://bsecured-server.onrender.com"
 DEFAULT_BUILD_COMMAND = "cmake --build ."
 STATE_DIR = ".bsecured"
 GUARD_DIR = pathlib.Path(__file__).resolve().parents[1] / "guard"
@@ -256,7 +256,8 @@ def run_build_command(command: str, build_dir: pathlib.Path) -> None:
 # write the build manifest. The project at --in is only read; everything happens in the
 # build directory.
 def build(src: pathlib.Path, seed_text: str | None, server: str, build_command: str,
-          out: pathlib.Path | None, inject_guard: bool = True) -> None:
+          out: pathlib.Path | None, inject_guard: bool = True,
+          backup_pins: list[str] | None = None) -> None:
     src = src.resolve()
     if not (src / "CMakeLists.txt").is_file():
         raise BuildError(f"{src} has no CMakeLists.txt; point --in at the project's root folder")
@@ -305,6 +306,18 @@ def build(src: pathlib.Path, seed_text: str | None, server: str, build_command: 
                   file=sys.stderr)
             print(f"         server key pin: {pin}", file=sys.stderr)
 
+    # The acceptable pin set: the current server pin plus any backup pins supplied
+    # (e.g. a planned replacement key), comma-joined for the guard. The guard reports
+    # only when the presented key matches none of them.
+    pins: list[str] = []
+    if pin:
+        pins.append(pin)
+    for extra in (backup_pins or []):
+        extra = extra.strip()
+        if extra and extra not in pins:
+            pins.append(extra)
+    pin_set = ",".join(pins)
+
     seed = seed_from(seed_text) if seed_text else os.urandom(32)
     public_key = bytes(SigningKey(seed).verify_key)
     # A new device on every build, even when --seed reuses a signing key.
@@ -323,7 +336,7 @@ def build(src: pathlib.Path, seed_text: str | None, server: str, build_command: 
             "BSEC_SERVER_HOST": host,
             "BSEC_SERVER_PORT": str(port),
             "BSEC_REPORT_URL": server,
-            "BSEC_PINNED_SPKI": pin,
+            "BSEC_PINNED_SPKI": pin_set,
             "BSEC_DEVICE_ID": device_id,
             "BSEC_BUILD_ID": build_id,
             "BSEC_SEED_B64": base64.b64encode(seed).decode(),
@@ -348,7 +361,7 @@ def build(src: pathlib.Path, seed_text: str | None, server: str, build_command: 
         "public_key_sha256": hashlib.sha256(public_key).hexdigest(),
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "guard_injected": inject_guard,
-        "pinned_spki": pin if inject_guard else None,
+        "pinned_spkis": pins if inject_guard else None,
         "poll_seconds": POLL_SECONDS if inject_guard else None,
     }
     (state / "build.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -358,7 +371,7 @@ def build(src: pathlib.Path, seed_text: str | None, server: str, build_command: 
     print(f"source:  {src}  (unchanged)")
     print(f"built:   {build_dir}")
     if inject_guard:
-        print(f"guard:   injected into {checked} source file(s); pinned to the server certificate")
+        print(f"guard:   injected into {checked} source file(s); pinned to {len(pins)} server key(s)")
     else:
         print("guard:   not injected")
 
@@ -474,11 +487,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", help="any string; the signing key is derived from it (random if omitted)")
     parser.add_argument("--build-command", dest="build_command", default=DEFAULT_BUILD_COMMAND, metavar="CMD",
                         help=f"command run in the build tree to compile (default: {DEFAULT_BUILD_COMMAND!r})")
+    parser.add_argument("--server", dest="server", default=None, metavar="URL",
+                        help="the bSecured server to pin and report to (default: $BSEC_SERVER_URL, else the built-in default)")
+    parser.add_argument("--backup-pin", dest="backup_pins", action="append", default=[], metavar="PIN",
+                        help="an extra acceptable server SPKI pin (repeatable); also read from $BSEC_BACKUP_PINS (comma-separated)")
     args = parser.parse_args(argv)
 
-    server = (os.environ.get("BSEC_SERVER_URL") or DEFAULT_SERVER).rstrip("/")
+    server = (args.server or os.environ.get("BSEC_SERVER_URL") or DEFAULT_SERVER).rstrip("/")
+    env_backups = [p.strip() for p in os.environ.get("BSEC_BACKUP_PINS", "").split(",") if p.strip()]
     try:
-        build(args.src, args.seed, server, build_command=args.build_command, out=args.out)
+        build(args.src, args.seed, server, build_command=args.build_command, out=args.out,
+              backup_pins=args.backup_pins + env_backups)
     except BuildError as error:
         print(f"bsecured: {error}", file=sys.stderr)
         return 1
