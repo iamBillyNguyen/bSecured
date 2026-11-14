@@ -34,6 +34,7 @@ int main(int argc, char** argv)
         return 1;
     }
     const bool matches = bsecured::pin_matches(obs.observed_spki);
+    // Join the accepted pins into one line for display
     string pinned;
     for (const string& p : bsecured::pinned_spkis())
     {

@@ -110,9 +110,9 @@ string issuer_of(X509* cert)
 
 }
 
-// The acceptable server SPKI pins compiled into this build. BSEC_PINNED_SPKI is a
-// comma-separated set: the current pin plus any backups (e.g. a planned replacement),
-// so a key rotation covered by the set does not raise a false alarm.
+// The server SPKI pins this build accepts, split out of the comma-separated
+// BSEC_PINNED_SPKI. More than one lets a planned key rotation pass without a false
+// alarm; the current pin is first, any backups after.
 vector<string> pinned_spkis()
 {
     vector<string> pins;
@@ -123,6 +123,7 @@ vector<string> pinned_spkis()
         const size_t comma = raw.find(',', start);
         const size_t end = (comma == string::npos) ? raw.size() : comma;
         string pin = raw.substr(start, end - start);
+        // Trim surrounding whitespace so " a , b " still yields "a" and "b"
         const size_t a = pin.find_first_not_of(" \t\r\n");
         const size_t b = pin.find_last_not_of(" \t\r\n");
         if (a != string::npos)
@@ -133,7 +134,7 @@ vector<string> pinned_spkis()
                 pins.push_back(pin);
             }
         }
-        if (comma == string::npos)
+        if (comma == string::npos) // no trailing comma, so that was the last pin
         {
             break;
         }
@@ -142,8 +143,8 @@ vector<string> pinned_spkis()
     return pins;
 }
 
-// True if the observed leaf SPKI matches any pin in the set. An empty observation or
-// an empty set never matches.
+// True if the observed leaf SPKI matches any pin we accept. An empty key or an empty
+// set never matches, so an unpinned build always reports.
 bool pin_matches(const string& observed_spki)
 {
     if (observed_spki.empty())
