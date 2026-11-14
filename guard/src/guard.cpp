@@ -36,7 +36,7 @@ void poll_forever()
             const Observation obs = probe();
             if (obs.connected)
             {
-                if (obs.observed_spki == pinned_spki())
+                if (pin_matches(obs.observed_spki))
                 {
                     last_reported.clear();
                 }

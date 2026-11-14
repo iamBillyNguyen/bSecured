@@ -9,6 +9,10 @@ const assert = require("node:assert/strict");
 const http = require("node:http");
 const crypto = require("node:crypto");
 
+// Force the in-memory store so the suite never needs a database, even if a
+// DATABASE_URL happens to be set in the environment.
+process.env.BSEC_STORE = "memory";
+
 const { app } = require("./server.js");
 
 let server;

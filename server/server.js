@@ -12,8 +12,10 @@ const fs = require("fs");
 const crypto = require("crypto");
 const express = require("express");
 
-const PORT = Number(process.env.BSEC_PORT || 8000);
-const HOST = process.env.BSEC_HOST || "127.0.0.1";
+// Render (and most hosts) inject PORT; honour it and bind all interfaces so the
+// platform can reach the process. Locally, fall back to the loopback defaults.
+const PORT = Number(process.env.PORT || process.env.BSEC_PORT || 8000);
+const HOST = process.env.HOST || process.env.BSEC_HOST || (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
 const MAX_BODY_BYTES = Number(process.env.BSEC_MAX_BODY_BYTES || 8192);
 const KEEPALIVE_MS = 15000; // milliseconds
 const MAX_REPORTS = Number(process.env.BSEC_MAX_REPORTS || 10000); // bounded in-memory queue
@@ -112,81 +114,13 @@ function verifySignature(publicKey, message, signatureB64)
   }
 }
 
-/** In-memory store */
-// TODO: To be replaced by a hosted DB
-const devices = new Map(); // device_id -> { projectId, publicKey (Buffer) }
-const reports = []; // bounded FIFO queue, newest last; capped at MAX_REPORTS
-let nextReportId = 1; // monotonic, so ids stay unique after the queue drops old reports
-
 /**
- * Registers a device, or re-keys one already in the same project
- * @param deviceId the device id to register
- * @param projectId the project the dashboard key opens
- * @param publicKey the device's raw 32-byte public key
- * @returns true if registered, false if the id belongs to another project
+ * The report store. In-memory by default — the prototype store, data lost on
+ * restart — and PostgreSQL when DATABASE_URL is set (production). Both back ends
+ * implement the same small async interface (see store/).
  */
-function registerDevice(deviceId, projectId, publicKey)
-{
-  const existing = devices.get(deviceId);
-
-  // Refuses a cross-project takeover of an existing device id
-  if (existing && existing.projectId !== projectId)
-  {
-    return false;
-  }
-
-  devices.set(deviceId, { projectId, publicKey });
-  return true;
-}
-
-/**
- * Stores one accepted report under its project
- * @param report the validated report
- * @param projectId the signing device's project
- * @param receivedAt the server clock timestamp
- * @returns the stored report, with its id
- */
-function saveReport(report, projectId, receivedAt)
-{
-  const stored = {
-    id: nextReportId++,
-    projectId,
-    device_id: report.device_id,
-    build_id: report.build_id,
-    threat_type: report.threat_type,
-    detected_at: report.detected_at, // client clock, evidence only
-    received_at: receivedAt, // server clock, orders everything
-    evidence: report.evidence,
-  };
-  reports.push(stored);
-
-  // Bounded queue: drop the oldest once the cap is reached, so attacker-controlled
-  // report volume cannot grow memory without limit.
-  if (reports.length > MAX_REPORTS)
-  {
-    reports.shift();
-  }
-  return stored;
-}
-
-/**
- * Gets a project's most recent reports, newest first
- * @param projectId the project to read
- * @param limit the most reports to return
- * @returns an array of stored reports
- */
-function recentReports(projectId, limit)
-{
-  const out = [];
-  for (let i = reports.length - 1; i >= 0 && out.length < limit; i--)
-  {
-    if (reports[i].projectId === projectId)
-    {
-      out.push(reports[i]);
-    }
-  }
-  return out;
-}
+const { createStore } = require("./store");
+const store = createStore({ maxReports: MAX_REPORTS });
 
 /**
  * Converts the report as JSON for the dashboard
@@ -351,6 +285,10 @@ function isoNow()
 const app = express();
 app.disable("x-powered-by");
 
+// Express 4 does not forward a rejected promise from an async handler to the
+// error middleware, so wrap async handlers to pass any rejection to next().
+const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
 // CORS for the local dashboard only, GET only: a browser can never register a
 // device or send a report cross-origin.
 app.use((req, res, next) => {
@@ -379,10 +317,10 @@ app.use((req, res, next) => {
 });
 
 // GET /healthz - check the server's health and liveness
-app.get("/healthz", (req, res) => res.json({ ok: true, store: "memory" }));
+app.get("/healthz", (req, res) => res.json({ ok: true, store: store.name }));
 
 // POST /v1/devices — register a build's device under the key's project.
-app.post("/v1/devices", express.json({ limit: MAX_BODY_BYTES }), (req, res) => {
+app.post("/v1/devices", express.json({ limit: MAX_BODY_BYTES }), asyncHandler(async (req, res) => {
   const projectId = getProjectIdFromRequestAuth(req);
   const { device_id, public_key } = req.body || {};
 
@@ -405,16 +343,16 @@ app.post("/v1/devices", express.json({ limit: MAX_BODY_BYTES }), (req, res) => {
   {
     throw new ErrorMessage(400, "malformed");
   }
-  if (!registerDevice(device_id, projectId, publicKey))
+  if (!(await store.registerDevice(device_id, projectId, publicKey)))
   {
     throw new ErrorMessage(409, "device_id_taken");
   }
 
   res.json({ device_id });
-});
+}));
 
 // POST /v1/reports — verify a signed report and store it, over the exact bytes.
-app.post("/v1/reports", express.raw({ type: "*/*", limit: MAX_BODY_BYTES }), (req, res) => {
+app.post("/v1/reports", express.raw({ type: "*/*", limit: MAX_BODY_BYTES }), asyncHandler(async (req, res) => {
   const started = process.hrtime.bigint();
   const raw = req.body; // exact bytes, as signed
 
@@ -424,7 +362,7 @@ app.post("/v1/reports", express.raw({ type: "*/*", limit: MAX_BODY_BYTES }), (re
     throw new ErrorMessage(400, "malformed");
   }
 
-  const device = devices.get(report.device_id);
+  const device = await store.getDevice(report.device_id);
   if (!device)
   {
     throw new ErrorMessage(401, "unknown_device");
@@ -435,18 +373,19 @@ app.post("/v1/reports", express.raw({ type: "*/*", limit: MAX_BODY_BYTES }), (re
     throw new ErrorMessage(401, "bad_signature");
   }
 
-  const stored = saveReport(report, device.projectId, isoNow());
+  const stored = await store.saveReport(report, device.projectId, isoNow());
   const ingestMs = Number(process.hrtime.bigint() - started) / 1e6;
   publish(device.projectId, { ...reportJson(stored), ingest_ms: Math.round(ingestMs * 1000) / 1000 });
   res.json({ report_id: stored.id, received_at: stored.received_at });
-});
+}));
 
 // GET /v1/reports — this project's recent reports, newest first.
-app.get("/v1/reports", (req, res) => {
+app.get("/v1/reports", asyncHandler(async (req, res) => {
   const projectId = getProjectIdFromRequestAuth(req);
   const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
-  res.json(recentReports(projectId, limit).map(reportJson));
-});
+  const rows = await store.recentReports(projectId, limit);
+  res.json(rows.map(reportJson));
+}));
 
 // GET /v1/stream — a live Server-Sent Events feed of this project's reports.
 app.get("/v1/stream", (req, res) => {
@@ -503,37 +442,44 @@ function createServer()
   return http.createServer(app);
 }
 
-module.exports = { app, createServer };
+module.exports = { app, createServer, store };
 
 // Start the server only when run directly, not when imported by the tests.
 if (require.main === module)
 {
-  const server = createServer();
-  server.listen(PORT, HOST, () => {
-    const scheme = process.env.BSEC_TLS_KEY && process.env.BSEC_TLS_CERT ? "https" : "http";
-    console.log(`bSecured server on ${scheme}://${HOST}:${PORT} (in-memory store)`);
-  });
-
-  // TODO: To be removed once DB is hosted because manually reloading TSL cert kills in memory store which includes device registration and the dashboard's live SSE connections
-  // Hot-reload the TLS certificate on SIGHUP, without a restart. An HTTPS server
-  // re-reads its key and cert and swaps them on the live listener, so a rotated key
-  // reaches a pinning guard (which then reports the change) while the in-memory
-  // store, the registered devices, and the dashboard's live SSE stream all survive.
-  // A plain HTTP server has no certificate, so the signal is ignored.
-  const keyPath = process.env.BSEC_TLS_KEY;
-  const certPath = process.env.BSEC_TLS_CERT;
-  if (keyPath && certPath)
-  {
-    process.on("SIGHUP", () => {
-      try
-      {
-        server.setSecureContext({ key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) });
-        console.log("TLS certificate reloaded (SIGHUP)");
-      }
-      catch (error)
-      {
-        console.error(`TLS reload failed: ${error.message}`);
-      }
+  (async () => {
+    await store.init(); // verify the store (e.g. the Postgres connection) before we listen
+    const server = createServer();
+    server.listen(PORT, HOST, () => {
+      const scheme = process.env.BSEC_TLS_KEY && process.env.BSEC_TLS_CERT ? "https" : "http";
+      console.log(`bSecured server on ${scheme}://${HOST}:${PORT} (store: ${store.name})`);
     });
-  }
+
+    // Hot-reload the TLS certificate on SIGHUP, without a restart. This matters
+    // only for local HTTPS runs — including exercising certificate rotation against
+    // the guard's pin (test T9): the HTTPS server re-reads its key and cert and
+    // swaps them on the live listener, so the dashboard's SSE connections survive
+    // the swap. With the hosted Postgres store, registered devices and reports
+    // already persist across any restart. On a platform like Render that terminates
+    // TLS at its edge, no cert is set here, so this path stays inactive.
+    const keyPath = process.env.BSEC_TLS_KEY;
+    const certPath = process.env.BSEC_TLS_CERT;
+    if (keyPath && certPath)
+    {
+      process.on("SIGHUP", () => {
+        try
+        {
+          server.setSecureContext({ key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) });
+          console.log("TLS certificate reloaded (SIGHUP)");
+        }
+        catch (error)
+        {
+          console.error(`TLS reload failed: ${error.message}`);
+        }
+      });
+    }
+  })().catch((err) => {
+    console.error("startup failed:", err.message);
+    process.exit(1);
+  });
 }
