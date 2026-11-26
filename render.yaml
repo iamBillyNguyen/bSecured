@@ -7,7 +7,7 @@ services:
     name: bsecured-server
     runtime: node
     repo: https://github.com/iamBillyNguyen/bSecured
-    branch: milestone-1            # change to the branch you deploy from (e.g. main after merge)
+    branch: milestone-2            # change to the branch you deploy from (e.g. main after merge)
     rootDir: server               # the Node app lives in server/, not the repo root
     plan: starter                 # always-on. The FREE plan sleeps when idle, which drops the
                                   # dashboard's Server-Sent Events stream — do not use free for the live demo.
