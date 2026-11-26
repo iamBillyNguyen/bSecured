@@ -196,7 +196,8 @@ function publish(projectId, event)
 }
 
 // Report validation: minimal, but a report can never name its own project.
-const THREAT_TYPES = new Set(["MITM_PIN_FAILURE"]);
+// One threat type per guard: the anti-MitM pin check and the anti-debugging tracer check.
+const THREAT_TYPES = new Set(["MITM_PIN_FAILURE", "DEBUGGER_ATTACHED"]);
 
 /**
  * Parses and validates the raw request body into a report

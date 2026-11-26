@@ -99,6 +99,20 @@ test("a signed report from a registered device is accepted and listed", async ()
   assert.equal(listed[0].threat_type, "MITM_PIN_FAILURE");
 });
 
+test("a signed debugger report is accepted and listed with its evidence", async () => {
+  const alice = await makeProject("alice");
+  const evidence = { tracer_pid: 4412, tracer_name: "gdb", ptrace_scope: 1 };
+  const r = await sendReport(alice.deviceId, alice.privateKey, {
+    overrides: { threat_type: "DEBUGGER_ATTACHED", evidence },
+  });
+  assert.equal(r.status, 200);
+
+  const listed = await (await listReports(alice.key)).json();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].threat_type, "DEBUGGER_ATTACHED");
+  assert.deepEqual(listed[0].evidence, evidence);
+});
+
 test("a forged signature is rejected and nothing is stored", async () => {
   const alice = await makeProject("alice");
   const attacker = newKeypair();
