@@ -5,7 +5,7 @@
 The `bsecured` tool compiles a detection guard into an existing CMake application without
 changing its source, and the guard reports tampering to a hosted server that shows detections
 live. Below, we give the dependencies and the steps to set up, run, and test the tool on a
-Linux host. We have verified it on Ubuntu 24.04.
+Linux host. We have verified it on Ubuntu 24.04 (ARM64).
 
 Unlike the earlier prototype, the monitoring backend is now deployed to a hosted platform
 (Express.js on Render, backed by a managed PostgreSQL database on Neon) and presents a
@@ -65,9 +65,10 @@ sudo apt install python3 python3-venv build-essential cmake pkg-config \
   **mitmproxy** with transparent `iptables` redirection; the cross-distribution test uses
   **Docker** (a Fedora container stands in for a second distribution); the anti-debugging test
   uses **GDB**.
-* **Hardware.** An ordinary x86-64 machine; no special hardware. A single VM is sufficient —
-  the interceptor and the guarded binary run on the same host, and Docker provides the second
-  distribution.
+* **Hardware.** An ordinary 64-bit machine; no special hardware. We have verified the build and
+  tests on an ARM64 (aarch64) virtual machine and have not yet tested on x86-64. A single VM is
+  sufficient — the interceptor and the guarded binary run on the same host, and Docker provides
+  the second distribution.
 * **Access.** `sudo` on the test host, to trust mitmproxy's CA, add the `iptables` rule, and
   attach GDB (Ubuntu's default ptrace policy blocks an unprivileged attach). No
   credentials are needed to send reports to the hosted backend. Running or deploying the
